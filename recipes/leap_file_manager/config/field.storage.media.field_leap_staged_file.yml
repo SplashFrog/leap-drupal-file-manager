@@ -1,0 +1,18 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - media
+id: media.field_leap_staged_file
+field_name: field_leap_staged_file
+entity_type: media
+type: entity_reference
+settings:
+  target_type: file
+module: core
+locked: false
+cardinality: 1
+translatable: true
+indexes: {  }
+persist_with_no_fields: false
+custom_storage: false

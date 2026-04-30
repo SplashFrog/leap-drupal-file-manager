@@ -1,0 +1,20 @@
+langcode: en
+status: true
+dependencies:
+  config:
+    - field.storage.media.field_leap_staged_file
+    - media.type.audio
+id: media.audio.field_leap_staged_file
+field_name: field_leap_staged_file
+entity_type: media
+bundle: audio
+label: 'Staged File (Internal Tracker)'
+description: 'Hidden field used to track replacement files during draft revisions.'
+required: false
+translatable: false
+default_value: {  }
+default_value_callback: ''
+settings:
+  handler: 'default:file'
+  handler_settings: {  }
+field_type: entity_reference

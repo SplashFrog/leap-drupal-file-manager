@@ -1,0 +1,11 @@
+name: 'Splash Frog - File Manager'
+core_version_requirement: ^11.3
+type: module
+version: '1.0.0'
+description: 'Enterprise file replacement, safe staging, and visibility enforcement for media entities.'
+package: 'Splash Frog'
+configure: leap_file_manager.settings
+dependencies:
+  - drupal:media
+  - drupal:file
+  - drupal:content_moderation

@@ -1,0 +1,28 @@
+<?php
+
+/**
+ * @file
+ */
+
+declare(strict_types=1);
+
+/**
+ * @file
+ * Installation and update functions for the Splash Frog File Manager module.
+ */
+
+/**
+ * Implements hook_install().
+ *
+ * Provides a post-installation messenger alert with the required Drush recipe
+ * command to attach the necessary workflow fields to media bundles.
+ */
+function leap_file_manager_install(): void {
+  // Dynamically determine the path for the recipe command.
+  $module_path = \Drupal::service('extension.list.module')->getPath('leap_file_manager');
+  $command = "drush recipe $module_path/recipes/leap_file_manager";
+
+  \Drupal::messenger()->addWarning(t('The Splash Frog File Manager module has been enabled. <strong>To complete the setup and attach the replacement fields to your media types, you must apply the associated recipe:</strong><br><br><code>@command</code>', [
+    '@command' => $command,
+  ]));
+}

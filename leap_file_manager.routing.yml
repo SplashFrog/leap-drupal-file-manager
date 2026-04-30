@@ -1,0 +1,7 @@
+leap_file_manager.settings:
+  path: '/admin/config/media/leap-file-manager'
+  defaults:
+    _form: '\Drupal\leap_file_manager\Form\SettingsForm'
+    _title: 'Leap File Manager Settings'
+  requirements:
+    _permission: 'administer site configuration'

@@ -1,0 +1,18 @@
+langcode: en
+status: true
+dependencies:
+  config:
+    - field.storage.media.field_leap_rename_file
+    - media.type.image
+id: media.image.field_leap_rename_file
+field_name: field_leap_rename_file
+entity_type: media
+bundle: image
+label: 'New Filename'
+description: 'Optional: Enter a new name for the file (without extension).'
+required: false
+translatable: false
+default_value: {  }
+default_value_callback: ''
+settings: {  }
+field_type: string

@@ -1,0 +1,10 @@
+leap_file_manager.settings:
+  type: config_object
+  label: 'File Manager Settings'
+  mapping:
+    use_private_filesystem:
+      type: boolean
+      label: 'Use Private File System'
+    public_fallback_path:
+      type: string
+      label: 'Public Fallback Path'

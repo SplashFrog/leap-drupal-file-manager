@@ -1,0 +1,2 @@
+use_private_filesystem: true
+public_fallback_path: 'private-files'

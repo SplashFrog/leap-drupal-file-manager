@@ -1,0 +1,5 @@
+leap_file_manager.settings:
+  title: 'Leap File Manager'
+  description: 'Manage file replacement workflows and secure storage paths.'
+  parent: system.admin_config_media
+  route_name: leap_file_manager.settings

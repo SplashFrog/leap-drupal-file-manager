@@ -1,0 +1,142 @@
+<?php
+
+/**
+ * @file
+ */
+
+declare(strict_types=1);
+
+/**
+ * @file
+ * Hook implementations for the Splash Frog File Manager module.
+ *
+ * This file serves as the procedural "glue" connecting Drupal core hooks
+ * to the object-oriented orchestrator and form handler services. It manages
+ * entity lifecycle events, UI alterations, and global cache-busting.
+ */
+
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\media\MediaInterface;
+
+/**
+ * Implements hook_help().
+ *
+ * Provides instructions on how to use the LEAP File Manager, including
+ * the necessary Drush recipe command to attach fields to media bundles.
+ */
+function leap_file_manager_help(string $route_name, RouteMatchInterface $route_match): string {
+  if ($route_name === 'help.page.leap_file_manager') {
+    $module_path = \Drupal::service('extension.list.module')->getPath('leap_file_manager');
+    $command = "drush recipe $module_path/recipes/leap_file_manager";
+
+    $output = '<h3>' . t('About') . '</h3>';
+    $output .= '<p>' . t('The Splash Frog File Manager module provides an enterprise-grade solution for managing media file replacements without destroying SEO value.') . '</p>';
+    $output .= '<h3>' . t('Installation Instructions') . '</h3>';
+    $output .= '<p>' . t('To complete the setup and attach the replacement and rename fields to your media types, you must run the following Drush command from your project root:') . '</p>';
+    $output .= '<pre><code>' . $command . '</code></pre>';
+    $output .= '<h3>' . t('Configuration') . '</h3>';
+    $output .= '<p>' . t('You can configure the secure file system and fallback paths on the <a href="/admin/config/media/leap-file-manager">File Manager Settings page</a>.') . '</p>';
+
+    return $output;
+  }
+  return '';
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter() for media forms.
+ *
+ * Delegates UI modifications (locking fields, adding replacement containers)
+ * to the dedicated Form Handler service. It targets all standard media
+ * add/edit forms via regex.
+ */
+function leap_file_manager_form_media_form_alter(array &$form, FormStateInterface $form_state, string $form_id): void {
+  // Drupal media form IDs typically look like:
+  // - media_document_add_form
+  // - media_document_edit_form.
+  if (preg_match("/^media_.*_form$/", $form_id)) {
+    \Drupal::service('leap_file_manager.form_handler')->alterForm($form, $form_state);
+  }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_presave() for media entities.
+ *
+ * Orchestrates the "Heavy Lifting" phase: detecting replacements, renames,
+ * and visibility changes (moving files between public and secure storage).
+ */
+function leap_file_manager_media_presave(EntityInterface $entity): void {
+  if ($entity instanceof MediaInterface) {
+    \Drupal::service('leap_file_manager.manager')->processPresave($entity);
+  }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_update() for media entities.
+ *
+ * Orchestrates the "Post-Process" phase: deleting original files that were
+ * replaced, triggering CDN purges, and finalizing image style flushes.
+ */
+function leap_file_manager_media_update(EntityInterface $entity): void {
+  if ($entity instanceof MediaInterface) {
+    \Drupal::service('leap_file_manager.manager')->processUpdate($entity);
+  }
+}
+
+/**
+ * Implements hook_preprocess_image().
+ *
+ * Resolves local browser caching issues. When an image is replaced using
+ * the same SEO-preserved filename, browsers often display the old cached
+ * version. This hook appends a timestamp (?v=[mtime]) to the URL based on
+ * the physical file's modification time.
+ *
+ * Special Logic: If the URI is an Image Style derivative, we resolve and
+ * check the timestamp of the original source file.
+ */
+function leap_file_manager_preprocess_image(array &$variables): void {
+  if (isset($variables['uri']) && (str_starts_with($variables['uri'], 'public://') || str_starts_with($variables['uri'], 'private://'))) {
+    $uri = $variables['uri'];
+    $source_uri = $uri;
+
+    // Pattern for resolving Image Style derivatives to their source.
+    if (preg_match('#^(public|private)://styles/[^/]+/(public|private)/(.*)$#', $uri, $matches)) {
+      $source_uri = $matches[2] . '://' . $matches[3];
+    }
+
+    $real_path = \Drupal::service('file_system')->realpath($source_uri);
+    if ($real_path && file_exists($real_path)) {
+      $mtime = filemtime($real_path);
+      // Append query parameter (v=timestamp).
+      if (str_contains($variables['attributes']['src'] ?? '', '?')) {
+        $variables['attributes']['src'] .= '&v=' . $mtime;
+      }
+      else {
+        $variables['attributes']['src'] .= '?v=' . $mtime;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_preprocess_file_link().
+ *
+ * Appends a cache-busting timestamp to physical document links (PDFs, DOCX)
+ * to ensure that browser caches or CDNs recognize a physical file swap
+ * even when the filename remains identical.
+ */
+function leap_file_manager_preprocess_file_link(array &$variables): void {
+  /** @var \Drupal\file\FileInterface $file */
+  $file = $variables['file'] ?? NULL;
+  if ($file && str_starts_with($file->getFileUri(), 'public://')) {
+    $real_path = \Drupal::service('file_system')->realpath($file->getFileUri());
+    if ($real_path && file_exists($real_path)) {
+      $mtime = filemtime($real_path);
+      $url = $variables['link']['#url'];
+      $options = $url->getOptions();
+      $options['query']['v'] = $mtime;
+      $url->setOptions($options);
+    }
+  }
+}

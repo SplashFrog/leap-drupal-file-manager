@@ -1,0 +1,9 @@
+name: 'Splash Frog - File Manager Fields'
+description: 'Attaches the Leap File Manager replacement and rename fields to standard media types.'
+type: 'Site-Building'
+install:
+  - media
+  - file
+  - content_moderation
+config:
+  strict: false

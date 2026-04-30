@@ -1,0 +1,22 @@
+{
+    "name": "splashfrog/leap_file_manager",
+    "description": "Enterprise media file replacement, safe staging, and SEO-preservation for Drupal.",
+    "type": "drupal-module",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Splash Frog",
+            "homepage": "https://splashfrog.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=8.3",
+        "drupal/core": "^11.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "Drupal\\leap_file_manager\\": "src/"
+        }
+    }
+}

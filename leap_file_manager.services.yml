@@ -1,0 +1,39 @@
+services:
+  # The Core Orchestrator
+  leap_file_manager.manager:
+    class: Drupal\leap_file_manager\MediaFileManager
+    arguments:
+      - '@leap_file_manager.state_analyzer'
+      - '@leap_file_manager.strategy_factory'
+      - '@file.repository'
+      - '@file_system'
+      - '@entity_type.manager'
+      - '@event_dispatcher'
+      - '@logger.factory'
+      - '@config.factory'
+      - '@file_url_generator'
+      - '@stream_wrapper_manager'
+      - '@database'
+      - '@?purge.queuers'
+      - '@?purge.queue'
+      - '@?purge.invalidations'
+
+  # The UI Guardrails
+  leap_file_manager.form_handler:
+    class: Drupal\leap_file_manager\Form\MediaFormHandler
+    arguments:
+      - '@leap_file_manager.manager'
+      - '@config.factory'
+
+  # The State Lookup Utility
+  leap_file_manager.state_analyzer:
+    class: Drupal\leap_file_manager\State\StateAnalyzer
+    arguments:
+      - '@content_moderation.moderation_information'
+      - '@logger.factory'
+
+  # The Media Type Strategy Factory
+  leap_file_manager.strategy_factory:
+    class: Drupal\leap_file_manager\Strategy\StrategyFactory
+    arguments:
+      - '@logger.factory'
