@@ -1,0 +1,4 @@
+administer leap file manager:
+  title: 'Administer Leap File Manager'
+  description: 'Manage settings for Leap File Manager.'
+  restrict access: true

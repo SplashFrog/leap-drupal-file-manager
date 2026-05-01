@@ -4,4 +4,4 @@ leap_file_manager.settings:
     _form: '\Drupal\leap_file_manager\Form\SettingsForm'
     _title: 'Leap File Manager Settings'
   requirements:
-    _permission: 'administer site configuration'
+    _permission: 'administer leap file manager'
