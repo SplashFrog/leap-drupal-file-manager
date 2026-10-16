@@ -11,13 +11,16 @@ This module provides a robust orchestrator that performs **physical file overwri
 ## ✨ Key Features
 
 - **SEO Preservation:** Physically overwrites existing files to maintain identical URLs.
-- **Safe Staging:** Replacement files are stored in a secure, non-public directory until the Media entity is officially *Published*.
+- **Safe Staging:** Replacement files are stored in a secure, non-public directory until the Media entity is officially *Published*. A staged upload always gets a name that is free on disk and in `file_managed`, so it can never overwrite another file.
+- **Collision-Safe Moves:** Every move (replacement, rename, publish/unpublish) is guarded so a file never takes over another file entity's record — core's `FileRepository::move()` with `Replace` would otherwise adopt that record and delete the moved file. Colliding moves get the next free `_N` name and log a warning.
 - **"Chameleon" UI:** Injects a custom replacement upload container directly into standard Media forms.
 - **Surgical Lockdown:** Prevents editors from accidentally deleting "Live" files via the standard Drupal widget.
 - **Dual-Engine Transfer:** Hot-swaps between `DrupalNativeTransfer` (for private stream wrappers) and `ManualTransfer` (native PHP logic for Docker/DDEV/Restricted environments).
 - **Auto Cache-Busting:** Appends a persistent `?v=[mtime]` timestamp to images and document links to force browser/CDN refreshes without a hard refresh.
 - **Ghost File Protection:** A 3-layer defense system that prevents physical file deletion if the replacement file is missing from the server.
 - **Metadata Merging:** Automatically flushes stale image dimensions and focal point data during replacement to ensure native thumbnail regeneration.
+
+> **For editors:** replacing a file keeps its link but deletes the previous file once the replacement is published. Reverting to a revision from before a replacement restores that revision's text and metadata, but the document **keeps its current file** (a warning says so) — to bring an old version back, re-upload it as a new replacement. The *Replace File* upload description says the same on the form.
 
 ---
 
@@ -89,6 +92,13 @@ The module uses the **Strategy Pattern** to handle different media types.
 
 ### Cache Busting
 The module implements `hook_preprocess_image` and `hook_preprocess_file_link`. It calculates the physical `filemtime` of the source file and appends it as a query string (`?v=12345`). This ensures that as soon as a file is replaced, every visitor to the site sees the updated version immediately.
+
+### Tests
+`tests/src/Kernel/MediaFileManagerTest.php` runs every scenario against both transfer engines and needs no site configuration:
+```bash
+SIMPLETEST_DB=sqlite://localhost//tmp/leap-kernel.sqlite vendor/bin/phpunit -c core/phpunit.xml.dist modules/custom/leap_file_manager/tests/src/Kernel/MediaFileManagerTest.php
+```
+(Run from the web root; adjust the module path to where it is installed.)
 
 ---
 

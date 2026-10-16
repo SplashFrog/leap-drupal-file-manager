@@ -103,7 +103,7 @@ final class StateAnalyzer {
       return FALSE;
     }
 
-    $original = $entity->original ?? NULL;
+    $original = $entity->getOriginal();
     if (!$original) {
       return FALSE;
     }
