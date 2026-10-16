@@ -11,7 +11,9 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\File\Event\FileUploadSanitizeNameEvent;
 use Drupal\Core\File\FileExists;
 use Drupal\Core\File\FileSystemInterface;
+use Drupal\Core\Messenger\MessengerInterface;
 use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\file\FileInterface;
 use Drupal\file\FileRepositoryInterface;
 use Drupal\leap_file_manager\State\EntityState;
@@ -39,6 +41,8 @@ use Drupal\Core\File\FileUrlGeneratorInterface;
  * 4. Stale metadata and cache derivatives are flushed upon completion.
  */
 class MediaFileManager {
+
+  use StringTranslationTrait;
 
   /**
    * The machine name of the rename field.
@@ -87,6 +91,8 @@ class MediaFileManager {
    *   Verifies file scheme validity.
    * @param \Drupal\Core\Database\Connection $database
    *   Direct database access for Manual transfer engine.
+   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
+   *   Shows editors warnings about their save.
    * @param object|null $purgeQueuers
    *   Optional: The Purge module's queuer service.
    * @param object|null $purgeQueue
@@ -106,6 +112,7 @@ class MediaFileManager {
     private readonly FileUrlGeneratorInterface $fileUrlGenerator,
     private readonly StreamWrapperManagerInterface $streamWrapperManager,
     private readonly Connection $database,
+    private readonly MessengerInterface $messenger,
     private readonly ?object $purgeQueuers = NULL,
     private readonly ?object $purgeQueue = NULL,
     private readonly ?object $purgeInvalidations = NULL,
@@ -236,12 +243,21 @@ class MediaFileManager {
     $strategy = $this->strategyFactory->getStrategyForEntity($entity, $source_field_name);
 
     $file_storage = $this->entityTypeManager->getStorage('file');
-    $original_fid = $entity->get($source_field_name)->target_id;
     /** @var \Drupal\file\FileInterface|null $original_file */
-    $original_file = $file_storage->load($original_fid);
+    $original_file = $file_storage->load($entity->get($source_field_name)->target_id)
+      ?? $this->keepCurrentFile($entity, $source_field_name);
 
     if (!$original_file) {
       return;
+    }
+    $original_fid = $original_file->id();
+
+    // A staged reference to the live file itself (left on an old revision and
+    // brought back by a revert) is not a replacement: "replacing" the file
+    // with itself would detach and then delete it.
+    if ($has_replacement && $entity->get($staged_field)->target_id == $original_fid) {
+      $entity->set($staged_field, []);
+      $has_replacement = FALSE;
     }
 
     // Skip processing if this is a non-default (forward) revision.
@@ -256,10 +272,51 @@ class MediaFileManager {
     // Trigger physical file movement.
     if ($should_execute_replacement && ($has_replacement || $has_rename)) {
       $this->executeReplaceRename($entity, $source_field_name, $state, $strategy, $original_file, $has_replacement, $has_rename);
+      // The transfer engine re-saves the file under its new URI; continue with
+      // the stored record, not the pre-move object.
+      $original_file = $file_storage->load($original_fid) ?? $original_file;
     }
 
     // Ensure the file is in the correct storage (public vs private) for current state.
     $this->enforceVisibility($entity, $source_field_name, $original_fid, $original_file, $state);
+  }
+
+  /**
+   * Keeps the current file when the entity points at one that no longer exists.
+   *
+   * Reverting to a revision from before a replacement copies that revision's
+   * file ID, but the replacement deleted that file. The save keeps everything
+   * else from the revision while the document keeps its current, working file
+   * (and thumbnail); the editor is warned and the event is logged.
+   *
+   * @return \Drupal\file\FileInterface|null
+   *   The current file now referenced by the entity, or NULL if there is none.
+   */
+  private function keepCurrentFile(MediaInterface $entity, string $source_field_name): ?FileInterface {
+    $current = $entity->isNew() ? NULL : $entity->getOriginal();
+    $current_fid = $current?->get($source_field_name)->target_id;
+    /** @var \Drupal\file\FileInterface|null $current_file */
+    $current_file = $current_fid ? $this->entityTypeManager->getStorage('file')->load($current_fid) : NULL;
+    if (!$current_file) {
+      return NULL;
+    }
+
+    $missing_fid = $entity->get($source_field_name)->target_id;
+    $entity->set($source_field_name, $current->get($source_field_name)->getValue());
+    $entity->set('thumbnail', $current->get('thumbnail')->getValue());
+
+    $this->logger->warning('Media @id referenced file @missing, which no longer exists; kept its current file @fid (@uri).', [
+      '@id' => (string) $entity->id(),
+      '@missing' => (string) $missing_fid,
+      '@fid' => (string) $current_file->id(),
+      '@uri' => $current_file->getFileUri(),
+    ]);
+    $this->messenger->addWarning($this->t('%label: the selected version uses a file that was replaced and no longer exists, so the document keeps its current file, %file. Its other changes were saved.', [
+      '%label' => $entity->label(),
+      '%file' => $current_file->getFilename(),
+    ]));
+
+    return $current_file;
   }
 
   /**
@@ -273,7 +330,7 @@ class MediaFileManager {
    * Helper: Strips the public fallback directory name from a path.
    */
   private function stripFallbackPrefix(string $relative_path): string {
-    $fallback = $this->getFallbackPath() . '/';
+    $fallback = trim($this->getFallbackPath(), '/') . '/';
     if (str_starts_with($relative_path, $fallback)) {
       return substr($relative_path, strlen($fallback));
     }
@@ -285,6 +342,53 @@ class MediaFileManager {
    */
   public function ensureDirectoryExists(string $uri): void {
     $this->transferEngine->ensureDirectory($uri);
+  }
+
+  /**
+   * Returns $uri, or the first "_N" variant free on disk and in file_managed.
+   */
+  public function getAvailableUri(string $uri): string {
+    if (!file_exists($uri) && !$this->fileRepository->loadByUri($uri)) {
+      return $uri;
+    }
+
+    // Suffix the URI itself; pathinfo() mangles root URIs ('public:').
+    $ext = pathinfo($uri, PATHINFO_EXTENSION);
+    $ext = $ext === '' ? '' : '.' . $ext;
+    $stem = substr($uri, 0, strlen($uri) - strlen($ext));
+    $i = 0;
+    do {
+      $candidate = $stem . '_' . $i++ . $ext;
+    } while (file_exists($candidate) || $this->fileRepository->loadByUri($candidate));
+
+    return $candidate;
+  }
+
+  /**
+   * Moves a file without ever taking over another file entity's record.
+   *
+   * Core FileRepository::move() with FileExists::Replace re-uses any OTHER
+   * file entity registered at the destination URI and deletes the moved one
+   * when it has no file usage yet (always true while a new media is in
+   * presave). Such a destination gets the next name free on disk and in
+   * file_managed instead. A disk-only occupant is left to $mode, which keeps
+   * the in-place replacement after antiHijack() working.
+   */
+  private function moveFile(FileInterface $file, string $destination_uri, FileExists $mode): ?FileInterface {
+    $owner = $this->fileRepository->loadByUri($destination_uri);
+    if ($owner && $owner->id() != $file->id()) {
+      $candidate = $this->getAvailableUri($destination_uri);
+      $this->logger->warning('File @fid would have taken over file @owner at @uri; moved to @new instead.', [
+        '@fid' => (string) $file->id(),
+        '@owner' => (string) $owner->id(),
+        '@uri' => $destination_uri,
+        '@new' => $candidate,
+      ]);
+      $destination_uri = $candidate;
+    }
+
+    $this->transferEngine->ensureDirectory($destination_uri);
+    return $this->transferEngine->moveFile($file, $destination_uri, $mode);
   }
 
   /**
@@ -399,8 +503,7 @@ class MediaFileManager {
     }
 
     if ($replacement_uri !== $target_uri) {
-      $this->transferEngine->ensureDirectory($target_uri);
-      $replacement_file = $this->transferEngine->moveFile($replacement_file, $target_uri, $move_mode) ?: $replacement_file;
+      $replacement_file = $this->moveFile($replacement_file, $target_uri, $move_mode) ?: $replacement_file;
 
       // Safe Deletion: Only remove the original file AFTER the new one is successfully moved.
       if (!$is_collision && $target_uri !== $original_uri_current && file_exists($original_uri_current)) {
@@ -458,13 +561,12 @@ class MediaFileManager {
     $target_uri = $this->generateSanitizedTargetUri($custom_name . '.' . $ext, ltrim($ext, '.'), dirname($original_uri_current));
 
     if ($original_uri_current !== $target_uri) {
-      $this->transferEngine->ensureDirectory($target_uri);
-      $this->transferEngine->moveFile($original_file, $target_uri, FileExists::Replace);
+      $moved = $this->moveFile($original_file, $target_uri, FileExists::Replace);
 
       $this->logger->notice('File renamed successfully for Media ID @id. The file "@orig" was renamed to "@new".', [
         '@id' => (string) $entity->id(),
         '@orig' => (string) basename($original_uri_current),
-        '@new' => (string) basename($target_uri),
+        '@new' => (string) basename($moved?->getFileUri() ?? $target_uri),
       ]);
 
       // Metadata Sync.
@@ -504,8 +606,11 @@ class MediaFileManager {
       return;
     }
 
-    $is_currently_public = str_starts_with($active_uri, 'public://');
-    $is_currently_secure = str_starts_with($active_uri, 'private://') || str_contains($active_uri, '/' . $this->getFallbackPath() . '/');
+    // Secure means private:// or the fallback directory at the public root; a
+    // public folder that merely shares the fallback's name is still public.
+    $fallback_root = 'public://' . trim($this->getFallbackPath(), '/') . '/';
+    $is_currently_secure = str_starts_with($active_uri, 'private://') || str_starts_with($active_uri, $fallback_root);
+    $is_currently_public = !$is_currently_secure && str_starts_with($active_uri, 'public://');
 
     $should_be_secure = !$state->isPublishedState;
 
@@ -513,12 +618,11 @@ class MediaFileManager {
     if ($should_be_secure && $is_currently_public) {
       $relative = $this->getRelativePath($active_uri);
       $new_uri = $this->getSecureScheme() . $relative;
-      $this->transferEngine->ensureDirectory($new_uri);
-      $this->transferEngine->moveFile($active_file, $new_uri, FileExists::Replace);
+      $moved = $this->moveFile($active_file, $new_uri, FileExists::Replace);
 
       $this->logger->info('File visibility SECURED for media @id: moved to @uri', [
         '@id' => (string) $entity->id(),
-        '@uri' => (string) $new_uri,
+        '@uri' => (string) ($moved?->getFileUri() ?? $new_uri),
       ]);
     }
     // SCENARIO: Restoring to public storage (Published).
@@ -527,12 +631,11 @@ class MediaFileManager {
       $clean_relative = $this->stripFallbackPrefix($relative);
 
       $new_uri = 'public://' . $clean_relative;
-      $this->transferEngine->ensureDirectory($new_uri);
-      $this->transferEngine->moveFile($active_file, $new_uri, FileExists::Replace);
+      $moved = $this->moveFile($active_file, $new_uri, FileExists::Replace);
 
       $this->logger->info('File visibility PUBLICIZED for media @id: moved to @uri', [
         '@id' => (string) $entity->id(),
-        '@uri' => (string) $new_uri,
+        '@uri' => (string) ($moved?->getFileUri() ?? $new_uri),
       ]);
 
       $this->setRuntimeValue($entity, 'needs_purge', TRUE);

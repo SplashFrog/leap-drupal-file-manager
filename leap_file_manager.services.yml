@@ -14,6 +14,7 @@ services:
       - '@file_url_generator'
       - '@stream_wrapper_manager'
       - '@database'
+      - '@messenger'
       - '@?purge.queuers'
       - '@?purge.queue'
       - '@?purge.invalidations'

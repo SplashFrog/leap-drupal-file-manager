@@ -8,6 +8,7 @@ use Drupal\Component\Utility\Bytes;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\File\Event\FileUploadSanitizeNameEvent;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\StringTranslation\ByteSizeMarkup;
 use Drupal\file\Entity\File;
 use Drupal\leap_file_manager\MediaFileManager;
 use Drupal\media\MediaInterface;
@@ -149,7 +150,7 @@ final class MediaFormHandler {
     $form[$source_field]['leap_replacement_container'][self::PSEUDO_REPLACEMENT_FIELD] = [
       '#type' => 'file',
       '#title' => t('Upload a new file'),
-      '#description' => t('It will overwrite the live file upon publishing. Allowed types: %ext.', [
+      '#description' => t('It replaces the live file when this revision is published, keeping the same link. The previous file is then deleted for good: reverting to an earlier revision restores its text, but the document keeps its current file. Allowed types: %ext.', [
         '%ext' => $extensions,
       ]),
       '#attributes' => [
@@ -240,7 +241,7 @@ final class MediaFormHandler {
     if (!empty($max_size)) {
       $bytes = Bytes::toNumber($max_size);
       if ($upload->getSize() > $bytes) {
-        $form_state->setErrorByName(self::PSEUDO_REPLACEMENT_FIELD, t('The file is too large. Maximum size allowed is %size.', ['%size' => format_size($bytes)]));
+        $form_state->setErrorByName(self::PSEUDO_REPLACEMENT_FIELD, t('The file is too large. Maximum size allowed is %size.', ['%size' => ByteSizeMarkup::create($bytes)]));
       }
     }
   }
@@ -337,7 +338,9 @@ final class MediaFormHandler {
 
     $secure_base = $manager->getSecureScheme();
     $destination_dir = $secure_base . $sub_directory;
-    $destination = $destination_dir . $sanitized_name;
+    // Never stage over an existing file: it may be this media's own unpublished
+    // original or another document's file.
+    $destination = $manager->getAvailableUri($destination_dir . $sanitized_name);
 
     // Ensure the directory is created using our bulletproof helper.
     $manager->ensureDirectoryExists($destination);
@@ -357,6 +360,8 @@ final class MediaFormHandler {
       @chmod($real_destination, 0666);
       $file = File::create([
         'uri' => $destination,
+        // Keep the uploaded name; publication derives the final name from it.
+        'filename' => $sanitized_name,
         'uid' => \Drupal::currentUser()->id(),
       // Temporary until promoted to live.
         'status' => 0,
